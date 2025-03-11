@@ -123,7 +123,6 @@ void TaskSystemParallelThreadPoolSpinning::spinFunc(IRunnable* runnable, int num
         lock.unlock();
         runnable->runTask(curTask, num_total_tasks);
     }
-    
 }
 
 void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_total_tasks) {
@@ -138,7 +137,7 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     lockylock spinlock;
     int nextTask = 0;
     for (int i = 0; i < this->num_threads; i++) {
-        pool.emplace_back(std::thread(&TaskSystemParallelThreadPoolSpinning::spinFunc, this, runnable, num_total_tasks, std::ref(spinlock), std::ref(nextTask)));
+        pool.emplace_back(std::thread(spinFunc, runnable, num_total_tasks, spinlock, nextTask));
     }
     for(int i = 0; i < this->num_threads; i++)
         pool[i].join();
@@ -195,7 +194,6 @@ void TaskSystemParallelThreadPoolSleeping::worker_thread() {
         lockConsumer.unlock();
         // std::cerr << "worker run: " << taskIndex << std::endl;
         runner->runTask(taskIndex, totalTask);
-
         {
             std::lock_guard<std::mutex> lockFinish(mutexFinish);
             finishedTask++;
