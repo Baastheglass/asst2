@@ -137,8 +137,8 @@ void TaskSystemParallelThreadPoolSpinning::run(IRunnable* runnable, int num_tota
     lockylock spinlock;
     int nextTask = 0;
     for (int i = 0; i < this->num_threads; i++) {
-        pool.emplace_back(std::thread(spinFunc, runnable, num_total_tasks, spinlock, nextTask));
-    }
+        pool.emplace_back(std::thread(&TaskSystemParallelThreadPoolSpinning::spinFunc, this, runnable, num_total_tasks, std::ref(spinlock), std::ref(nextTask)));
+    }    
     for(int i = 0; i < this->num_threads; i++)
         pool[i].join();
 }
