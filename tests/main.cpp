@@ -40,9 +40,13 @@ ITaskSystem *selectTaskSystemRefImpl(int num_threads, TaskSystemType type) {
         return new TaskSystemParallelSpawn(num_threads);
     } else if (type == PARALLEL_THREAD_POOL_SPINNING) {
         return new TaskSystemParallelThreadPoolSpinning(num_threads);
-    } else if (type == PARALLEL_THREAD_POOL_SLEEPING) {
-        return new TaskSystemParallelThreadPoolSleeping(num_threads);
-    } else {
+    } 
+    // else if (type == PARALLEL_THREAD_POOL_SLEEPING) 
+    // {
+    //     return new TaskSystemParallelThreadPoolSleeping(num_threads);
+    // } 
+    else 
+    {
         return NULL;
     }
 }
