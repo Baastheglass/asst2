@@ -1,5 +1,11 @@
 #include "tasksys.h"
-
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+#include <thread>
 
 IRunnable::~IRunnable() {}
 
@@ -121,27 +127,54 @@ void TaskSystemParallelThreadPoolSpinning::sync() {
  * Parallel Thread Pool Sleeping Task System Implementation
  * ================================================================
  */
+ class TaskSystemParallelThreadPoolSleeping 
+ {
+    public:
+        TaskSystemParallelThreadPoolSleeping(int num_threads);
+        ~TaskSystemParallelThreadPoolSleeping();
+        const char* name();
+        void run(IRunnable* runnable, int num_total_tasks);
+        TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
+                                const std::vector<TaskID>& deps);
+        void sync();
+    
+    private:
+        struct Task {
+            IRunnable* runnable;
+            int num_total_tasks;
+            int completed_tasks;
+            std::vector<TaskID> dependencies;
+        };
 
+        int num_threads;
+        std::vector<std::thread> workers;
+        std::queue<std::pair<IRunnable*, int>> ready_queue;
+        std::unordered_map<TaskID, Task> task_map;
+        std::unordered_map<TaskID, std::unordered_set<TaskID>> dependency_map;
+        std::mutex mtx;
+        std::condition_variable cv;
+        bool stop;
+        TaskID next_task_id;
+        int active_tasks;
+    
+        void workerThread();
+};
+   
 const char* TaskSystemParallelThreadPoolSleeping::name() {
     return "Parallel + Thread Pool + Sleep";
 }
 
-TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): ITaskSystem(num_threads)
-{
-    //
+
+TaskSystemParallelThreadPoolSleeping::TaskSystemParallelThreadPoolSleeping(int num_threads): num_threads(num_threads), stop(false), next_task_id(1), active_tasks(0) {
+     //
     // TODO: CS149 student implementations may decide to perform setup
     // operations (such as thread pool construction) here.
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    t_manager = new TaskManager();
-    current_id = 0;
-    num_of_threads = num_threads;
-    work_exists = true;
-    thread_pool = new std::thread[num_threads];
-    for(int i = 0; i<num_threads; i++){
-        thread_pool[i] = std::thread(&TaskSystemParallelThreadPoolSleeping::worker_thread, this);
-    } 
+    for (int i = 0; i < num_threads; ++i) {
+        workers.emplace_back(&TaskSystemParallelThreadPoolSleeping::workerThread, this);
+    }
 }
 TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     //
@@ -150,96 +183,16 @@ TaskSystemParallelThreadPoolSleeping::~TaskSystemParallelThreadPoolSleeping() {
     // Implementations are free to add new class member variables
     // (requiring changes to tasksys.h).
     //
-    work_exists = false;
     {
-        std::lock_guard<std::mutex> lock(*(t_manager->executing_mutex));
-        t_manager->sleeping_thread->notify_all();
+        std::lock_guard<std::mutex> lock(mtx);
+        stop = true;
     }
-    for(int i = 0; i<num_of_threads; i++){
-        thread_pool[i].join();
-    }
-    delete[] thread_pool;
-    delete  t_manager;
-}
-/* run - is a single job
-   working_rn - keeps track of the state of all running runs
-   local_elem - the piece of work the thread is currently doing
-   executing_vec - work free for the picking
-   waiting_vec - vec which has dependencies that its waiting on.
-
- */
- void TaskSystemParallelThreadPoolSleeping::worker_thread(){
-    Task_Element local_elem;
-    bool not_skip = true;
-    while(work_exists){
-        if(not_skip){
-            std::unique_lock<std::mutex> lock3(*(thread_manager->executing_mutex));
-            local_elem=thread_manager->fetch_work();
-            if(local_elem.myID<0){
-                if(work_exists){
-                    thread_manager->sleeping_thread->wait(lock3);
-                    local_elem=thread_manager->fetch_work();
-                }
-            }
-            lock3.unlock();
-        }
-        if(local_elem.myID >= 0){
-            not_skip = true;
-            local_elem.runnable->runTask(local_elem.count,local_elem.num_total_tasks);
-            thread_manager->task_finished->lock();
-            auto it = thread_manager->working_rn.find(local_elem.myID);
-            if (it == thread_manager->working_rn.end()) {
-                thread_manager->working_rn[local_elem.myID] = 1;
-            }
-            else{
-                thread_manager->working_rn[local_elem.myID] += 1;
-            }
-            if(thread_manager->working_rn[local_elem.myID] == local_elem.num_total_tasks){
-                thread_manager->working_rn.erase(local_elem.myID);
-                thread_manager->task_finished->unlock();
-                thread_manager->run_finished->lock();
-
-                thread_manager->runs_finished.insert(local_elem.myID);
-                thread_manager->latest_finished++;
-                if(thread_manager->latest_finished+1 == curr_run_id){
-                    thread_manager->finishing->notify_all();
-                    thread_manager->run_finished->unlock();
-                }
-                else{
-                    thread_manager->run_finished->unlock();
-                }
-
-                std::unique_lock<std::mutex> lock2(*thread_manager->waiting_mutex);
-                auto it = thread_manager->dependency_map.find(local_elem.myID);
-                if (it !=  thread_manager->dependency_map.end()) {
-                    bool new_elem = false;
-                    for (TaskID dependent : it->second) {
-                        thread_manager->dependency_count[dependent]--;
-                        if (thread_manager->dependency_count[dependent] == 0) {
-                            if(new_elem==false){
-                                thread_manager->executing_mutex->lock();
-                                new_elem = true;
-                            }
-                            thread_manager->executing_vec.push(thread_manager->waiting_vec[dependent]);
-                            thread_manager->waiting_vec.erase(dependent);
-                        }
-                    }
-                    if(new_elem){
-                        local_elem=thread_manager->fetch_work();
-                        not_skip = false;
-                        thread_manager->executing_mutex->unlock();
-                        thread_manager->sleeping_thread->notify_all();
-                    }
-                    thread_manager->dependency_map.erase(it->first);
-                    lock2.unlock();
-                }
-            }
-            else{
-                thread_manager->task_finished->unlock();
-            }
-        }
+    cv.notify_all();
+    for (std::thread &worker : workers) {
+        worker.join();
     }
 }
+
 void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_total_tasks) {
 
 
@@ -249,8 +202,7 @@ void TaskSystemParallelThreadPoolSleeping::run(IRunnable* runnable, int num_tota
     // tasks sequentially on the calling thread.
     //
 
-    std::vector<TaskID> noDeps;
-    runAsyncWithDeps(runnable, num_total_tasks, noDeps);
+    TaskID task_id = runAsyncWithDeps(runnable, num_total_tasks, {});
     sync();
 }
 
@@ -261,35 +213,22 @@ TaskID TaskSystemParallelThreadPoolSleeping::runAsyncWithDeps(IRunnable* runnabl
     //
     // TODO: CS149 students will implement this method in Part B.
     //
-    t_manager->run_finished->lock();
-    bool not_found = true;
-    int deps_size = 0;
-    for(TaskID dep : deps) {
-        if(t_manager->runs_finished.find(dep)==t_manager->runs_finished.end()){
-            if(not_found){
-                t_manager->waiting_mutex->lock();
-                not_found = false;
-            }
-            t_manager->dependency_map[dep].insert(curr_run_id);
-            deps_size++;
+
+    std::lock_guard<std::mutex> lock(mtx);
+    TaskID task_id = next_task_id++;
+    task_map[task_id] = {runnable, num_total_tasks, 0, deps};
+    
+    if (deps.empty()) {
+        for (int i = 0; i < num_total_tasks; ++i) {
+            ready_queue.push({runnable, i});
+        }
+        cv.notify_all();
+    } else {
+        for (TaskID dep : deps) {
+            dependency_map[dep].insert(task_id);
         }
     }
-
-    curr_run_id++;
-    t_manager->run_finished->unlock();
-    if(not_found){
-        t_manager->executing_mutex->lock();
-        t_manager->executing_vec.push(Task_Element(runnable,num_total_tasks,0,curr_run_id-1));
-        // wake up sleeping threads
-        t_manager->executing_mutex->unlock();
-        t_manager->sleeping_thread->notify_all();
-    }
-    else{
-        t_manager->dependency_count[curr_run_id-1] = deps_size;
-        t_manager->waiting_vec[curr_run_id-1] = Task_Element(runnable,num_total_tasks,0,curr_run_id-1);
-        t_manager->waiting_mutex->unlock();
-    }
-    return curr_run_id-1;
+    return task_id;
 }
 
 void TaskSystemParallelThreadPoolSleeping::sync() {
@@ -297,13 +236,44 @@ void TaskSystemParallelThreadPoolSleeping::sync() {
     //
     // TODO: CS149 students will modify the implementation of this method in Part B.
     //
-    std::unique_lock<std::mutex> lock(*(t_manager->run_finished));
-    if(t_manager->latest_finished + 1 == curr_run_id){
-        return;
+
+    std::unique_lock<std::mutex> lock(mtx);
+    cv.wait(lock, [this] { return active_tasks == 0 && task_map.empty(); });
+}
+void TaskSystemParallelThreadPoolSleeping::workerThread() {
+    while (true) {
+        std::pair<IRunnable*, int> task;
+        {
+            std::unique_lock<std::mutex> lock(mtx);
+            cv.wait(lock, [this] { return stop || !ready_queue.empty(); });
+            if (stop) return;
+            task = ready_queue.front();
+            ready_queue.pop();
+            ++active_tasks;
+        }
+        
+        task.first->runTask(task.second, task_map[next_task_id - 1].num_total_tasks);
+        
+        {
+            std::lock_guard<std::mutex> lock(mtx);
+            --active_tasks;
+            if (active_tasks == 0) {
+                for (auto it = dependency_map.begin(); it != dependency_map.end();) {
+                    TaskID dep = it->first;
+                    if (task_map.find(dep) == task_map.end()) {
+                        for (TaskID ready_task : it->second) {
+                            for (int i = 0; i < task_map[ready_task].num_total_tasks; ++i) {
+                                ready_queue.push({task_map[ready_task].runnable, i});
+                            }
+                            cv.notify_all();
+                        }
+                        it = dependency_map.erase(it);
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            cv.notify_all();
+        }
     }
-    else
-    {
-        t_manager->finishing->wait(lock);
-    }
-    return;
 }

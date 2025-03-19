@@ -1,7 +1,14 @@
-#ifndef _TASKSYS_H
+#ifndef _TASKSYS_H 
 #define _TASKSYS_H
 
 #include "itasksys.h"
+#include <queue>
+#include <unordered_map>
+#include <vector>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
 
 /*
  * TaskSystemSerial: This class is the student's implementation of a
@@ -68,6 +75,18 @@ class TaskSystemParallelThreadPoolSleeping: public ITaskSystem {
         TaskID runAsyncWithDeps(IRunnable* runnable, int num_total_tasks,
                                 const std::vector<TaskID>& deps);
         void sync();
+
+    private:
+        std::vector<std::thread> workers;  // Thread pool
+        std::queue<std::pair<IRunnable*, int>> readyQueue;  // Tasks ready to execute
+        std::unordered_map<TaskID, std::vector<std::pair<IRunnable*, int>>> task_map; // Tasks waiting for dependencies
+        std::unordered_map<TaskID, int> dependencyCount;  // Remaining dependencies per task
+        std::mutex queueMutex;  // Protects shared data
+        std::condition_variable queueCondition;  // Notifies worker threads
+        std::atomic<bool> stop;  // Signals workers to stop
+        std::atomic<int> runningTasks;  // Tracks the number of active tasks
+
+        void workerThread();  // Worker thread function
 };
 
 #endif
