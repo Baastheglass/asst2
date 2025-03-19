@@ -1,6 +1,5 @@
 #ifndef _TASKSYS_H 
 #define _TASKSYS_H
-
 #include "itasksys.h"
 #include <queue>
 #include <unordered_map>
